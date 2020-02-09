@@ -1,17 +1,30 @@
 #include "MyClass.hpp"
-
-#include <boost/program_options/options_description.hpp>
-#include <boost/program_options/option.hpp>
+#include <wiringPi.h>
 
 #include <utility>
 #include <memory>
 #include <iostream>
+#include <vector>
+#include <string>
+
+auto initialize()
+{
+	if(wiringPiSetup() != 0) {
+		std::cerr << "wiringPiSetup() error" << std::endl; 
+		std::exit(EXIT_FAILURE);
+	}
+}
 
 int main(int argc, char* argv[])
 {
-	std::cout << "Ilosc argumentow: " << argc << std::endl;
-	for(auto i = 0u; i < argc; ++i)
-		std::cout << "Argument " << i << " ma wartosc: " << argv[i] << std::endl;
-	auto myClass = std::make_unique<MyClass>(argc);
-	std::cout << std::endl;
+	initialize();
+
+	std::vector<std::string> args;
+	args.reserve(argc);
+	for(auto i = 0u; i < static_cast<uint>(argc); ++i)
+		args.push_back(argv[i]);
+
+	for(auto it : args)
+		std::cout << it << std::endl;
+
 }
