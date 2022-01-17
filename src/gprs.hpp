@@ -2,50 +2,38 @@
 #define GPRS_HPP
 
 #include <chrono>
+#include <experimental/optional>
 
 #include <boost/asio.hpp>
 #include <boost/asio/high_resolution_timer.hpp>
 
 #include "extendedSerialPort.hpp"
+#include "sim800.hpp"
 
-namespace
-{
-    using namespace std::chrono_literals;
-    std::chrono::milliseconds kDefaultTimeout = 2s;
-}
-
-class Sim800Gprs
-{
+class Gprs : public Sim800 {
 public:
-    using Timeout = boost::asio::high_resolution_timer;
     using BoolResultCallback = std::function<void(bool)>;
-
-    Sim800Gprs(ExtendedSerialPort& serialPort);
-    void Init();
-    void Join(const std::string& apnName);
-    void StartTCP(const std::string& address, std::size_t port);
-    void ReadTCPData();
+    enum class ConnectionType {
+        TCP = 0,
+        UDP = 1,
+    };
+    Gprs(ExtendedSerialPort& serialPort);
+    void Init(BoolResultCallback cb);
+    void Join(const std::string& apnName, BoolResultCallback cb);
+    void StartConnection(const std::string& address, std::size_t port, ConnectionType connectionType, BoolResultCallback cb);
+    void SendData(const std::vector<char>& data, BoolResultCallback cb);
+    void ReadData(Sim800::StringResultCallback cb);
     void CloseTCP();
-    void GetIPAddress();
-    void Execute(const std::string& atCommand, std::vector<std::string> expectedResult, BoolResultCallback cb, std::chrono::milliseconds timeout = kDefaultTimeout);
+    void ShutConnection(BoolResultCallback cb);
+    void GetIPAddress(Sim800::StringResultCallback cb);
+
 
 private:
-    bool ContainsError();
-    bool ContainsExpectedResult();
-    bool Contains(const std::vector<std::string>& searchWords);
-    void ReadSomeUntilResultOrTimeout(const boost::system::error_code& error, std::size_t readBytes);
-    void OnTimeout(const boost::system::error_code& error);
-    void PostCallbackWithResult(bool success);
+    void CheckSimStatusCb(BoolResultCallback cb, OptionalString success);
+    void CheckSimStatus(BoolResultCallback cb);
 
 private:
-    boost::asio::serial_port& serialPort_;
-    boost::asio::io_service& ioService_;
-    std::vector<std::string> expectedResult_;
-    std::vector<char> tmpBuffer_ = std::vector<char>(1024);
-    std::vector<char> result;
-    Timeout timeout_;
-    bool timeouted_;
-    BoolResultCallback cb_;
+    uint retryCount_ = 0;
 };
 
 #endif // GPRS_HPP

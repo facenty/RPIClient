@@ -25,113 +25,62 @@ namespace
     }
   }
 
-  // struct ValueOrError {
-  //   bool success() {
-  //     return bool(result);
-  //   }
-  //   std::experimental::optional<std::string> error;
-  //   std::experimental::optional<std::string> result;
-  // };
+  class App {
+  public:
+    App() : ioService_(), serialPort_(ioService_), gprs_(serialPort_) {};
 
-  // class Sim800Gprs {
-  //   public:
-  //     using BoolResultCallback = std::function<void(ValueOrError)>;
-  //     using Timeout = boost::asio::high_resolution_timer;
+    void DoStuff() {
+      serialPort_.open(kSerialName, ec_);
+      if (ec_) {
+        BOOST_LOG_TRIVIAL(fatal) << "serial port open(), failed port name " << kSerialName;
+        std::exit(EXIT_FAILURE);
+      }
+      serialPort_.set_option(boost::asio::serial_port::baud_rate(115200));
+      // gprs_ = std::make_unique<Gprs>(ioService_);
+      gprs_.Init(std::bind(&App::InitCb, this, std::placeholders::_1));
+      ioService_.run();
+    }
 
-  //     Sim800Gprs(boost::asio::serial_port& serialPort) :
-  //         serialPort_(serialPort),
-  //         ioService_(serialPort_.get_io_service()),
-  //         timeout_(ioService_) {}
+    void InitCb(bool success) {
+      if (!success) {
+        std::exit(EXIT_FAILURE);
+        return;
+      }
+      gprs_.Join("plus", std::bind(&App::JoinCb, this, std::placeholders::_1));
+    }
 
-  //     void ExecuteAtCommand(const std::vector<char>& atCommand, BoolResultCallback cb, std::chrono::milliseconds timeout = kDefaultTimeout) {
-  //       cb_ = std::move(cb);
-  //       timeout_.expires_from_now(timeout);
-  //       serialPort_.write_some(boost::asio::buffer(atCommand));
-  //       serialPort_.async_read_some(boost::asio::buffer(tmpBuffer_),
-  //           boost::bind(&Sim800Gprs::ReadSomeUntilResultOrTimeout, this, boost::asio::placeholders::error,
-  //           boost::asio::placeholders::bytes_transferred));
-  //       timeout_.async_wait(boost::bind(&Sim800Gprs::OnTimeout, this, boost::asio::placeholders::error));
-  //       timeouted_ = false;
-  //     }
+    void JoinCb(bool success) {
+      if (!success) {
+        std::exit(EXIT_FAILURE);
+        return;
+      }
+      // gprs_.GetIPAddress(std::bind(&App::GetIpCb, this, std::placeholders::_1));
+      gprs_.StartConnection("chodowicz.pl", 9999, Gprs::ConnectionType::TCP, std::bind(&App::GetIpCb, this, std::placeholders::_1));
+    }
 
-  //   private:
-  //     bool ContainsError() {
-  //       return Contains({{kErrorReply}});
-  //     }
+    void GetIpCb(Gprs::OptionalString result) {
+      if (result) {
+        std::cout << "IP size: " << result->size() << std::endl;
+        std::cout << "IP: " << result.value() << std::endl;
+        return;
+      }
+      std::cout << "IP get error" << std::endl;
+      std::exit(EXIT_FAILURE);
+    }
 
-  //     bool ContainsOk() {
-  //       return Contains({{kOKReply}});
-  //     }
+    void StartConnectionCb(bool result) {
+      if (!result) {
+        std::cout << "Failed to connect;" << std::endl;
+        std::exit(EXIT_FAILURE);
+        return;
+      }
+    }
 
-  //     bool Contains(const std::vector<std::string>& searchWords) {
-  //       auto it = result.begin();
-  //       for (const auto& word : searchWords) {
-  //         it = std::search(it, result.end(), word.begin(), word.end());
-  //         if (it == result.end()) {
-  //           return false;
-  //         }
-  //         it += word.size();
-  //       }
-  //       return true;
-  //     }
-
-  //     void ReadSomeUntilResultOrTimeout(const boost::system::error_code &error, std::size_t readBytes) {
-  //       if (timeouted_ == true) {
-  //         return;
-  //       }
-  //       if (error) {
-  //         PostCallbackWithError(error.message());
-  //         return;
-  //       }
-  //       result.insert(result.end(), tmpBuffer_.begin(), tmpBuffer_.begin() + readBytes );
-  //       if (!ContainsError() && !ContainsOk()) {
-  //         serialPort_.async_read_some(boost::asio::buffer(tmpBuffer_),
-  //           boost::bind(&Sim800Gprs::ReadSomeUntilResultOrTimeout, this, boost::asio::placeholders::error,
-  //           boost::asio::placeholders::bytes_transferred));
-
-  //         return;
-  //       }
-  //       if (ContainsError()) {
-  //         PostCallbackWithError(std::string(result.begin(), result.end()));
-  //         return;
-  //       }
-  //       PostCallbackWithResult(std::string(result.begin(), result.end()));
-  //     }
-
-  //     void OnTimeout(const boost::system::error_code& error)
-  //     {
-  //       if (!error) {
-  //         timeouted_ = true;
-  //         PostCallbackWithError("Request timeouted");
-  //       }
-  //     }
-
-  //     void PostCallbackWithError(const std::string& error) {
-  //       ValueOrError vor;
-  //       vor.error = error;
-  //       PostCallbackWithValueOrError(std::move(vor));
-  //     }
-
-  //     void PostCallbackWithResult(const std::string& result) {
-  //       ValueOrError vor;
-  //       vor.result = result;
-  //       PostCallbackWithValueOrError(std::move(vor));
-  //     }
-
-  //     void PostCallbackWithValueOrError(ValueOrError vor) {
-  //       timeout_.cancel();
-  //       ioService_.post(std::bind(std::move(cb_), std::move(vor)));
-  //     }
-
-  //   private:
-  //     boost::asio::serial_port& serialPort_;
-  //     boost::asio::io_service& ioService_;
-  //     std::vector<char> tmpBuffer_ = std::vector<char>(1024);
-  //     std::vector<char> result;
-  //     Timeout timeout_;
-  //     bool timeouted_;
-  //     BoolResultCallback cb_;
-  // };
+    boost::system::error_code ec_;
+    boost::asio::io_service ioService_;
+    ExtendedSerialPort serialPort_;
+    Gprs gprs_;
+  };
 
 } // namespace
 
@@ -147,20 +96,18 @@ int main(int argc, char* argv[])
   //         << BOOST_VERSION % 100
   //         << std::endl;
 
-  boost::system::error_code ec;
-  boost::asio::io_service io_service;
-  ExtendedSerialPort serial_port(io_service);
-  serial_port.open(kSerialName, ec);
-  if (ec) {
-    BOOST_LOG_TRIVIAL(fatal) << "serial port open(), failed port name " << kSerialName;
-    return EXIT_FAILURE;
-  }
-  serial_port.set_option(boost::asio::serial_port::baud_rate(115200));
+  // boost::system::error_code ec;
+  // boost::asio::io_service io_service;
+  // ExtendedSerialPort serial_port(io_service);
+  // serial_port.open(kSerialName, ec);
+  // if (ec) {
+  //   BOOST_LOG_TRIVIAL(fatal) << "serial port open(), failed port name " << kSerialName;
+  //   return EXIT_FAILURE;
+  // }
+  // serial_port.set_option(boost::asio::serial_port::baud_rate(115200));
 
-  Sim800Gprs Sim800Gprs(serial_port);
-  Sim800Gprs.Execute({ kATCommand }, { {kOKReply} }, [](bool success) {
-    std::cout << "Success: " << (success ? "YES" : "NO");
-    });
-  io_service.run();
+  App app;
+  app.DoStuff();
+
   return EXIT_SUCCESS;
 }
