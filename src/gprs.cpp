@@ -4,6 +4,7 @@
 #include <boost/bind.hpp>
 
 #include <functional>
+#include <cstdlib>
 
 
 namespace
@@ -49,8 +50,23 @@ void Gprs::Init(BoolResultCallback cb) {
 
 void Gprs::Join(const std::string& apnName, BoolResultCallback cb) {
 
-  auto connectGprsCb = [this, cb](OptionalString result) {
-    this->PostCallbackWithArgs(cb, bool(result));
+  auto getIpAddressCb = [this, cb](OptionalString result) {
+    if (!result) {
+      BOOST_LOG_TRIVIAL(error) << "Failed to get IP address";
+      this->PostCallbackWithArgs(cb, false);
+      return;
+    }
+    BOOST_LOG_TRIVIAL(info) << "IP address: " << result.value();
+    this->PostCallbackWithArgs(cb, true);
+  };
+
+  auto connectGprsCb = [this, cb, getIpAddressCb](OptionalString result) {
+    if (!result) {
+      BOOST_LOG_TRIVIAL(error) << "Bring up wireless connection failed";
+      this->PostCallbackWithArgs(cb, false);
+      return;
+    }
+    GetIPAddress(getIpAddressCb);
   };
 
   auto setApnCb = [cb, connectGprsCb, this](OptionalString result) {
@@ -63,24 +79,12 @@ void Gprs::Join(const std::string& apnName, BoolResultCallback cb) {
     Execute("AT+CIICR\r\n", { {"OK"} }, connectGprsCb);
   };
 
-  auto checkApnCb = [cb, setApnCb, apnName, this](OptionalString result) {
-    if (result) {
-      // We have got aps set to the one that we want so we should bring up gprs connection
-      setApnCb("apn set previously");
-      return;
-    }
-    // Set the apn
-    Execute("AT+CSTT=\"" + apnName + "\",\"\",\"\"\r\n", { {"OK"} }, setApnCb);
-  };
-
-  auto shutCb = [cb, setApnCb, checkApnCb, apnName, this](bool result) {
+  auto shutCb = [cb, setApnCb, apnName, this](bool result) {
     if (!result) {
       BOOST_LOG_TRIVIAL(error) << "shut gprs failed";
       this->PostCallbackWithArgs(cb, false);
       return;
     }
-    // Check if current apn is the one that we want
-    // Execute("AT+CSTT?\r\n", { {apnName} }, checkApnCb);
     Execute("AT+CSTT=\"" + apnName + "\",\"\",\"\"\r\n", { {"OK"} }, setApnCb);
 
   };
@@ -88,12 +92,20 @@ void Gprs::Join(const std::string& apnName, BoolResultCallback cb) {
 }
 
 void Gprs::StartConnection(const std::string& address, std::size_t port, ConnectionType connectionType, BoolResultCallback cb) {
-  std::ostringstream cmd;
-  cmd << "AT+CIPSTART = \"" << connectionType << "\",\"" << address << "\"," << port << "\r\n";
-  using namespace std::chrono_literals;
-  Execute(cmd.str(), { {"OK"}, {"CONNECT OK"} }, [cb, this](OptionalString result) {
-    PostCallbackWithArgs(cb, bool(result));
-    }, 6s);
+  auto cipHeadCb = [this, cb, address, port, connectionType](OptionalString result) {
+    if (!result) {
+      BOOST_LOG_TRIVIAL(error) << "Can't set ciphead";
+      this->PostCallbackWithArgs(cb, false);
+      return;
+    }
+    std::ostringstream cmd;
+    cmd << "AT+CIPSTART=\"" << connectionType << "\",\"" << address << "\"," << port << "\r\n";
+    using namespace std::chrono_literals;
+    Execute(cmd.str(), { {"OK"}, {"CONNECT OK"} }, [cb, this](OptionalString result) {
+      PostCallbackWithArgs(cb, bool(result));
+      }, 6s);
+  };
+  Execute("AT+CIPHEAD=1\r\n", { {"OK"} }, cipHeadCb);
 }
 
 void Gprs::SendData(const std::vector<char>& data, BoolResultCallback cb) {
@@ -103,7 +115,7 @@ void Gprs::SendData(const std::vector<char>& data, BoolResultCallback cb) {
       PostCallbackWithArgs(cb, false);
       return;
     }
-    Execute(std::string(data.begin(), data.end()), { {"SEND"}, {"OK"} }, [cb, this](OptionalString result) {
+    Execute(std::string(data.begin(), data.end()), { {"SEND OK"} }, [cb, this](OptionalString result) {
       PostCallbackWithArgs(cb, bool(result));
       });
   };
@@ -111,10 +123,27 @@ void Gprs::SendData(const std::vector<char>& data, BoolResultCallback cb) {
   Execute(cmd.str(), { {">"} }, sendWhenPossible);
 }
 
-void Gprs::ReadData(StringResultCallback cb) {
+void Gprs::StartReading(StringResultCallback dataPart) {
+  ReadSomeUntilContainsOrWord({ {"+IPD,"}, {":"} }, "CLOSED",
+    [this, dataPart](OptionalString result) {
+      if (!result) {
+        PostCallbackWithArgs(dataPart, std::move(result));
+        return;
+      }
+      auto offset = result.value().find("+IPD,") + std::string("+IPD,").size();
+      auto len = result.value().find(":") - offset;
+      auto dataSizeStr = result.value().substr(offset, len);
+      auto dataSize = std::atoi(dataSizeStr.c_str());
+      ReadAmountOfData(dataSize, dataPart);
+    });
 }
 
-void Gprs::CloseTCP() {
+void Gprs::CloseTCP(BoolResultCallback cb) {
+  using namespace std::chrono_literals;
+  Execute("AT+CIPCLOSE\r\n", { {"CLOSE OK"} },
+    [cb, this](OptionalString result) {
+      PostCallbackWithArgs(cb, bool(result));
+    }, 6s);
 }
 
 void Gprs::GetIPAddress(StringResultCallback cb) {
@@ -122,10 +151,11 @@ void Gprs::GetIPAddress(StringResultCallback cb) {
 }
 
 void Gprs::ShutConnection(BoolResultCallback cb) {
+  using namespace std::chrono_literals;
   Execute("AT+CIPSHUT\r\n", { {"OK"}, {"SHUT OK"} },
     [cb, this](OptionalString result) {
       PostCallbackWithArgs(cb, bool(result));
-    });
+    }, 6s);
 }
 
 void Gprs::CheckSimStatusCb(BoolResultCallback cb, OptionalString success) {

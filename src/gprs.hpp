@@ -22,8 +22,8 @@ public:
     void Join(const std::string& apnName, BoolResultCallback cb);
     void StartConnection(const std::string& address, std::size_t port, ConnectionType connectionType, BoolResultCallback cb);
     void SendData(const std::vector<char>& data, BoolResultCallback cb);
-    void ReadData(Sim800::StringResultCallback cb);
-    void CloseTCP();
+    void StartReading(Sim800::StringResultCallback dataPartCb);
+    void CloseTCP(BoolResultCallback cb);
     void ShutConnection(BoolResultCallback cb);
     void GetIPAddress(Sim800::StringResultCallback cb);
 
@@ -34,6 +34,7 @@ private:
 
 private:
     uint retryCount_ = 0;
+    std::experimental::optional<BoolResultCallback> stopReadingCb_;
 };
 
 #endif // GPRS_HPP

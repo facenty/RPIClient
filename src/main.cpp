@@ -25,9 +25,24 @@ namespace
     }
   }
 
+  enum class ClientType : bool {
+    PUBLISHER = 0,
+    SUBSCRIBER = 1,
+  };
+
+  std::string ClientTypeToString(ClientType clientType) {
+    if (clientType == ClientType::PUBLISHER) return "PUBLISHER";
+    return "SUBSCRIBER";
+  }
+
+  ClientType DeduceClientType(const std::string& ct) {
+    if (ct == "PUBLISHER") return ClientType::PUBLISHER;
+    return ClientType::SUBSCRIBER;
+  }
+
   class App {
   public:
-    App() : ioService_(), serialPort_(ioService_), gprs_(serialPort_) {};
+    App(ClientType ct) : ioService_(), serialPort_(ioService_), gprs_(serialPort_), ct_(ct) {};
 
     void DoStuff() {
       serialPort_.open(kSerialName, ec_);
@@ -36,7 +51,6 @@ namespace
         std::exit(EXIT_FAILURE);
       }
       serialPort_.set_option(boost::asio::serial_port::baud_rate(115200));
-      // gprs_ = std::make_unique<Gprs>(ioService_);
       gprs_.Init(std::bind(&App::InitCb, this, std::placeholders::_1));
       ioService_.run();
     }
@@ -55,31 +69,73 @@ namespace
         return;
       }
       // gprs_.GetIPAddress(std::bind(&App::GetIpCb, this, std::placeholders::_1));
-      gprs_.StartConnection("chodowicz.pl", 9999, Gprs::ConnectionType::TCP, std::bind(&App::GetIpCb, this, std::placeholders::_1));
+      gprs_.StartConnection("chodowicz.pl", 9999, Gprs::ConnectionType::TCP, std::bind(&App::StartConnectionCb, this, std::placeholders::_1));
+    }
+
+    void OnConnectionClosed(bool success) {
+      if (!success) {
+        std::exit(EXIT_FAILURE);
+        return;
+      }
+      gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
+    }
+
+    void OnConnectionShut(bool success) {
+      if (!success) {
+        std::exit(EXIT_FAILURE);
+        return;
+      }
+      std::exit(EXIT_SUCCESS);
     }
 
     void GetIpCb(Gprs::OptionalString result) {
       if (result) {
-        std::cout << "IP size: " << result->size() << std::endl;
-        std::cout << "IP: " << result.value() << std::endl;
+        BOOST_LOG_TRIVIAL(info) << "IP size: " << result->size();
+        BOOST_LOG_TRIVIAL(info) << "IP: " << result.value();
         return;
       }
-      std::cout << "IP get error" << std::endl;
       std::exit(EXIT_FAILURE);
     }
 
     void StartConnectionCb(bool result) {
       if (!result) {
-        std::cout << "Failed to connect;" << std::endl;
         std::exit(EXIT_FAILURE);
         return;
       }
+      std::string data = "Oskar";
+      gprs_.SendData({ data.begin(), data.end() }, std::bind(&App::OnDataSend, this, std::placeholders::_1));
+    }
+
+    void OnDataSend(bool result) {
+      if (!result) {
+        std::exit(EXIT_FAILURE);
+        return;
+      }
+      count_ = 1;
+      gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
+    }
+
+    void OnData(Gprs::OptionalString result) {
+      if (!result) {
+        BOOST_LOG_TRIVIAL(error) << "Failed to read or connection closed";
+        std::exit(EXIT_FAILURE);
+        return;
+      }
+      BOOST_LOG_TRIVIAL(info) << "Data: [ " << result.value() << " ]";
+      if (count_ < 3) {
+        count_++;
+        gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
+        return;
+      }
+      gprs_.CloseTCP(std::bind(&App::OnConnectionClosed, this, std::placeholders::_1));
     }
 
     boost::system::error_code ec_;
     boost::asio::io_service ioService_;
     ExtendedSerialPort serialPort_;
     Gprs gprs_;
+    int count_ = 0;
+    ClientType ct_;
   };
 
 } // namespace
@@ -95,18 +151,11 @@ int main(int argc, char* argv[])
   //         << "."
   //         << BOOST_VERSION % 100
   //         << std::endl;
-
-  // boost::system::error_code ec;
-  // boost::asio::io_service io_service;
-  // ExtendedSerialPort serial_port(io_service);
-  // serial_port.open(kSerialName, ec);
-  // if (ec) {
-  //   BOOST_LOG_TRIVIAL(fatal) << "serial port open(), failed port name " << kSerialName;
-  //   return EXIT_FAILURE;
-  // }
-  // serial_port.set_option(boost::asio::serial_port::baud_rate(115200));
-
-  App app;
+  if (argc != 2) {
+    BOOST_LOG_TRIVIAL(fatal) << "Wrong number of parameters";
+    return EXIT_FAILURE;
+  }
+  App app(DeduceClientType(argv[1]));
   app.DoStuff();
 
   return EXIT_SUCCESS;
