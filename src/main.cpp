@@ -3,6 +3,8 @@
 #include <memory>
 #include <iostream>
 #include <functional>
+#include <iomanip>
+#include <ctime>
 
 #include <boost/asio.hpp>
 #include <boost/asio/io_service.hpp>
@@ -42,7 +44,8 @@ namespace
 
   class App {
   public:
-    App(ClientType ct) : ioService_(), serialPort_(ioService_), gprs_(serialPort_), ct_(ct) {};
+    using Timeout = boost::asio::high_resolution_timer;
+    App(ClientType ct) : ioService_(), serialPort_(ioService_), gprs_(serialPort_), ct_(ct), timeout_(ioService_) {};
 
     void DoStuff() {
       serialPort_.open(kSerialName, ec_);
@@ -102,40 +105,84 @@ namespace
         std::exit(EXIT_FAILURE);
         return;
       }
-      std::string data = "Oskar";
-      gprs_.SendData({ data.begin(), data.end() }, std::bind(&App::OnDataSend, this, std::placeholders::_1));
+      std::string data = "{\"ClientType\":\"" + ClientTypeToString(ct_) + "\"}";
+      gprs_.SendData({ data.begin(), data.end() }, std::bind(&App::OnHandshakeSend, this, std::placeholders::_1));
     }
 
-    void OnDataSend(bool result) {
+    void OnHandshakeSend(bool result) {
       if (!result) {
-        std::exit(EXIT_FAILURE);
+        BOOST_LOG_TRIVIAL(error) << "Failed to send handshake";
+        gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
         return;
       }
-      count_ = 1;
-      gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
+      gprs_.StartReading(std::bind(&App::OnHandshakeResponse, this, std::placeholders::_1));
+    }
+
+    void OnHandshakeResponse(Gprs::OptionalString result) {
+      if (!result || result.value().find("OK") == std::string::npos) {
+        BOOST_LOG_TRIVIAL(error) << "Failed to handshake";
+        gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
+        return;
+      }
+      if (ct_ == ClientType::SUBSCRIBER) {
+        gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
+        return;
+      }
+      SendData();
     }
 
     void OnData(Gprs::OptionalString result) {
       if (!result) {
         BOOST_LOG_TRIVIAL(error) << "Failed to read or connection closed";
-        std::exit(EXIT_FAILURE);
+        gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
         return;
       }
       BOOST_LOG_TRIVIAL(info) << "Data: [ " << result.value() << " ]";
-      if (count_ < 3) {
-        count_++;
+      // if (count_ < 3) {
+      // count_++;
+      gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
+      // return;
+      // }
+    }
+
+    void SendData() {
+      auto t = std::time(nullptr);
+      auto tm = *std::localtime(&t);
+      std::ostringstream oss;
+      oss << std::put_time(&tm, "%d-%m-%Y %H-%M-%S");
+      std::string data = oss.str();
+      gprs_.SendData({ data.begin(), data.end() }, std::bind(&App::OnDataSend, this, std::placeholders::_1));
+    }
+
+    void OnDataSend(bool result) {
+      if (!result) {
+        BOOST_LOG_TRIVIAL(error) << "Failed to send data";
+        gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
+        return;
+      }
+      if (ct_ == ClientType::SUBSCRIBER) {
         gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
         return;
       }
-      gprs_.CloseTCP(std::bind(&App::OnConnectionClosed, this, std::placeholders::_1));
+      using namespace std::chrono_literals;
+      timeout_.expires_from_now(2s);
+      timeout_.async_wait(std::bind(&App::OnTimeout, this, std::placeholders::_1));
+    }
+
+
+    void OnTimeout(const boost::system::error_code& error) {
+      if (!error) {
+        SendData();
+      }
     }
 
     boost::system::error_code ec_;
     boost::asio::io_service ioService_;
     ExtendedSerialPort serialPort_;
     Gprs gprs_;
-    int count_ = 0;
     ClientType ct_;
+    int count_ = 0;
+    Timeout timeout_;
   };
 
 } // namespace
