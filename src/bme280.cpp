@@ -50,7 +50,6 @@ bool Bme280::Init() {
 
   i2cFd_.reset(fd);
 
-  // wiringPiI2CWriteReg8(i2cFd_.get(), BME280_REGISTER_SOFTRESET, 0xB6);
   ReadCalibrationData();
   wiringPiI2CWriteReg8(i2cFd_.get(), 0xf2, 0x01);   // humidity oversampling x 1
   wiringPiI2CWriteReg8(i2cFd_.get(), 0xf4, 0x25);
