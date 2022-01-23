@@ -9,11 +9,15 @@
 #include <boost/asio.hpp>
 #include <boost/asio/io_service.hpp>
 #include <boost/log/trivial.hpp>
+#include <csignal>
 
 #include "gprs.hpp"
+#include "bme280.hpp"
 
 namespace
 {
+  volatile std::sig_atomic_t gSignalStatus;
+
   constexpr const char kATCommand[] = "AT\r\n";
   constexpr const char kOKReply[] = "OK";
   constexpr const char kSerialName[] = "/dev/serial0";
@@ -128,6 +132,8 @@ namespace
         gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
         return;
       }
+      bme280_ = std::make_unique<Bme280>();
+      bme280_->Init();
       SendData();
     }
 
@@ -138,18 +144,20 @@ namespace
         return;
       }
       BOOST_LOG_TRIVIAL(info) << "Data: [ " << result.value() << " ]";
-      // if (count_ < 3) {
-      // count_++;
+      if (gSignalStatus == SIGINT) {
+        gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
+        return;
+      }
       gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
-      // return;
-      // }
     }
 
     void SendData() {
-      auto t = std::time(nullptr);
-      auto tm = *std::localtime(&t);
+      auto sensorsData = bme280_->ReadSensorsData();
       std::ostringstream oss;
-      oss << std::put_time(&tm, "%d-%m-%Y %H-%M-%S");
+      oss
+        << "{\"humidity\": " << sensorsData.humidity << ", "
+        << "\"temperature\": " << sensorsData.temperature << ", "
+        << "\"pressure\": " << sensorsData.pressure / 100.0 << "}";
       std::string data = oss.str();
       gprs_.SendData({ data.begin(), data.end() }, std::bind(&App::OnDataSend, this, std::placeholders::_1));
     }
@@ -160,15 +168,18 @@ namespace
         gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
         return;
       }
+      if (gSignalStatus == SIGINT) {
+        gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
+        return;
+      }
       if (ct_ == ClientType::SUBSCRIBER) {
         gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
         return;
       }
       using namespace std::chrono_literals;
-      timeout_.expires_from_now(2s);
+      timeout_.expires_from_now(5s);
       timeout_.async_wait(std::bind(&App::OnTimeout, this, std::placeholders::_1));
     }
-
 
     void OnTimeout(const boost::system::error_code& error) {
       if (!error) {
@@ -181,11 +192,17 @@ namespace
     ExtendedSerialPort serialPort_;
     Gprs gprs_;
     ClientType ct_;
-    int count_ = 0;
     Timeout timeout_;
+    std::unique_ptr<Bme280> bme280_;
   };
 
 } // namespace
+
+void signalHandler(int signal)
+{
+  BOOST_LOG_TRIVIAL(info) << "Recieved signal: " << signal;
+  gSignalStatus = signal;
+}
 
 int main(int argc, char* argv[])
 {
@@ -202,6 +219,7 @@ int main(int argc, char* argv[])
     BOOST_LOG_TRIVIAL(fatal) << "Wrong number of parameters";
     return EXIT_FAILURE;
   }
+  std::signal(SIGINT, signalHandler);
   App app(DeduceClientType(argv[1]));
   app.DoStuff();
 
