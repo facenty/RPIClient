@@ -21,6 +21,9 @@ namespace
   constexpr const char kATCommand[] = "AT\r\n";
   constexpr const char kOKReply[] = "OK";
   constexpr const char kSerialName[] = "/dev/serial0";
+  constexpr const char kServerAddress[] = "chodowicz.pl";
+  constexpr uint kServerPort = 9999;
+  constexpr const char kApnName[] = "plus";
 
   auto initialize()
   {
@@ -67,7 +70,7 @@ namespace
         std::exit(EXIT_FAILURE);
         return;
       }
-      gprs_.Join("plus", std::bind(&App::JoinCb, this, std::placeholders::_1));
+      gprs_.Join(kApnName, std::bind(&App::JoinCb, this, std::placeholders::_1));
     }
 
     void JoinCb(bool success) {
@@ -76,7 +79,7 @@ namespace
         return;
       }
       // gprs_.GetIPAddress(std::bind(&App::GetIpCb, this, std::placeholders::_1));
-      gprs_.StartConnection("chodowicz.pl", 9999, Gprs::ConnectionType::TCP, std::bind(&App::StartConnectionCb, this, std::placeholders::_1));
+      gprs_.StartConnection(kServerAddress, kServerPort, Gprs::ConnectionType::TCP, std::bind(&App::StartConnectionCb, this, std::placeholders::_1));
     }
 
     void OnConnectionClosed(bool success) {
@@ -84,7 +87,7 @@ namespace
         std::exit(EXIT_FAILURE);
         return;
       }
-      gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
+      std::exit(EXIT_SUCCESS);
     }
 
     void OnConnectionShut(bool success) {
@@ -145,7 +148,7 @@ namespace
       }
       BOOST_LOG_TRIVIAL(info) << "Data: [ " << result.value() << " ]";
       if (gSignalStatus == SIGINT) {
-        gprs_.ShutConnection(std::bind(&App::OnConnectionShut, this, std::placeholders::_1));
+        gprs_.CloseTCP(std::bind(&App::OnConnectionClosed, this, std::placeholders::_1));
         return;
       }
       gprs_.StartReading(std::bind(&App::OnData, this, std::placeholders::_1));
@@ -159,6 +162,7 @@ namespace
         << "\"temperature\": " << sensorsData.temperature << ", "
         << "\"pressure\": " << sensorsData.pressure / 100.0 << "}";
       std::string data = oss.str();
+      BOOST_LOG_TRIVIAL(info) << "Data: [ " << data << " ]";
       gprs_.SendData({ data.begin(), data.end() }, std::bind(&App::OnDataSend, this, std::placeholders::_1));
     }
 
@@ -206,15 +210,15 @@ void signalHandler(int signal)
 
 int main(int argc, char* argv[])
 {
-  initialize();
+  // initialize();
 
   // std::cout << "Boost version: "
-  //         << BOOST_VERSION / 100000
-  //         << "."
-  //         << BOOST_VERSION / 100 % 1000
-  //         << "."
-  //         << BOOST_VERSION % 100
-  //         << std::endl;
+  //   << BOOST_VERSION / 100000
+  //   << "."
+  //   << BOOST_VERSION / 100 % 1000
+  //   << "."
+  //   << BOOST_VERSION % 100
+  //   << std::endl;
   if (argc != 2) {
     BOOST_LOG_TRIVIAL(fatal) << "Wrong number of parameters";
     return EXIT_FAILURE;
